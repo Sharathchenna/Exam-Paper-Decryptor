@@ -8,6 +8,8 @@ class FolderSelector extends StatelessWidget {
   final String selectedPath;
   final void Function(String) onPathSelected;
   final IconData leadingIcon;
+  final bool fileMode;
+  final List<String>? allowedExtensions;
 
   const FolderSelector({
     super.key,
@@ -16,6 +18,8 @@ class FolderSelector extends StatelessWidget {
     required this.selectedPath,
     required this.onPathSelected,
     this.leadingIcon = Icons.folder_outlined,
+    this.fileMode = false,
+    this.allowedExtensions,
   });
 
   @override
@@ -32,9 +36,20 @@ class FolderSelector extends StatelessWidget {
         const SizedBox(height: 8),
         InkWell(
           onTap: () async {
-            String? result = await FilePicker.platform.getDirectoryPath();
-            if (result != null) {
-              onPathSelected(result);
+            if (fileMode) {
+              FilePickerResult? result = await FilePicker.platform.pickFiles(
+                type:
+                    allowedExtensions != null ? FileType.custom : FileType.any,
+                allowedExtensions: allowedExtensions,
+              );
+              if (result != null) {
+                onPathSelected(result.files.single.path!);
+              }
+            } else {
+              String? result = await FilePicker.platform.getDirectoryPath();
+              if (result != null) {
+                onPathSelected(result);
+              }
             }
           },
           child: Container(

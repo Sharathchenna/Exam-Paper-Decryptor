@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:decryptor/models/decryption_config.dart';
 import 'package:decryptor/services/decryption_service.dart';
+import 'package:decryptor/services/zip_service.dart';
 import 'package:decryptor/theme/app_theme.dart';
 import 'package:decryptor/widgets/custom_text_field.dart';
 import 'package:decryptor/widgets/folder_selector.dart';
@@ -17,7 +18,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final DecryptionConfig _config = DecryptionConfig();
   final TextEditingController _collegeCodeController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
   final DecryptionService _decryptionService = DecryptionService();
+  final ZipService _zipService = ZipService();
 
   bool _isProcessing = false;
   List<String> _logs = [];
@@ -28,18 +31,27 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _collegeCodeController.addListener(_updateCollegeCode);
+    _passwordController.addListener(_updatePassword);
   }
 
   @override
   void dispose() {
     _collegeCodeController.removeListener(_updateCollegeCode);
+    _passwordController.removeListener(_updatePassword);
     _collegeCodeController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
   void _updateCollegeCode() {
     setState(() {
       _config.collegeCode = _collegeCodeController.text;
+    });
+  }
+
+  void _updatePassword() {
+    setState(() {
+      _config.zipPassword = _passwordController.text;
     });
   }
 
@@ -72,59 +84,78 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       _addLog('Starting decryption process...');
 
-      // Get all files in source directory
-      final sourceDir = Directory(_config.sourceDirectory);
-      final files = sourceDir.listSync().whereType<File>().toList();
-
-      setState(() {
-        _totalFiles = files.length;
-      });
-
-      _addLog('Found $_totalFiles files to decrypt');
-
-      // Load AES key using RSA private key
-      final aesKeyPath = path.join(
-        _config.keyDirectory,
-        '${_config.collegeCode}aes.key',
+      // Create desktop output directory with date
+      final date = DateTime.now().toString().split(' ')[0];
+      final desktopPath = path.join(
+        Platform.environment['USERPROFILE'] ??
+            Platform.environment['HOME'] ??
+            '',
+        'Desktop',
+        'decryption_$date',
       );
-      final privateKeyPath = path.join(
-        _config.keyDirectory,
+
+      Directory(desktopPath).createSync(recursive: true);
+      _addLog('Created output directory: $desktopPath');
+
+      // Extract zip file
+      _addLog('Extracting zip file...');
+      final extractedPath = await _zipService.extractZipFile(
+        _config.sourceDirectory,
+        _config.zipPassword,
+      );
+      _addLog('Files extracted successfully');
+
+      // Copy key files to C:/keys
+      _addLog('Copying key files...');
+      const keysPath = r'C:\keys';
+      await _zipService.copyKeysToDirectory(
+        path.join(extractedPath, 'keys'),
+        keysPath,
+      );
+      _addLog('Key files copied successfully');
+
+      // Load encryption key
+      _addLog('Loading encryption key...');
+      final keyFile = File(
+        path.join(keysPath, '${_config.collegeCode}aes.key'),
+      );
+      final privateKeyFile = path.join(
+        keysPath,
         '${_config.collegeCode}private.key',
       );
 
-      _addLog('Loading encryption keys...');
-      final keysLoaded = await _decryptionService.loadKey(
-        File(aesKeyPath),
-        privateKeyPath, // Changed to pass the path as String
-      );
+      final success = await _decryptionService.loadKey(keyFile, privateKeyFile);
+      if (!success) {
+        throw Exception('Failed to load encryption key');
+      }
+      _addLog('Encryption key loaded successfully');
 
-      if (!keysLoaded) {
-        _addLog(
-          'Failed to load encryption keys. Check if the files exist and the college code is correct.',
-        );
-        setState(() {
-          _isProcessing = false;
-        });
-        return;
+      // Process encrypted files
+      final encryptedDir = Directory(
+        path.join(extractedPath, '6036_encrypted'),
+      );
+      if (!encryptedDir.existsSync()) {
+        throw Exception('Encrypted files directory not found');
       }
 
-      _addLog('Keys loaded successfully');
+      final files = encryptedDir.listSync();
+      _totalFiles = files.length;
+      _addLog('Found $_totalFiles files to decrypt');
 
-      // Process each file
       for (var file in files) {
+        if (file is! File) continue;
+
         final fileName = path.basename(file.path);
         _addLog('Processing file: $fileName');
 
-        // Generate output file name based on the pattern in RSA_AES_decr
         final outputFileName = _decryptionService.generateOutputFilename(
           file.path,
-          _config.destinationDirectory,
+          desktopPath,
         );
 
-        // Decrypt the file
         final success = await _decryptionService.decrypt(
-          File(file.path), // Changed to pass a File object
-          File(outputFileName), // Changed to pass a File object
+          File(file.path),
+          File(outputFileName),
         );
 
         if (success) {
@@ -301,11 +332,20 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           const SizedBox(height: 24),
 
-                          // Source folder selector
+                          // Zip password field
+                          CustomTextField(
+                            label: 'Zip Password',
+                            hintText: 'Enter password for the zip file',
+                            controller: _passwordController,
+                            prefixIcon: Icons.lock,
+                            obscureText: true,
+                          ),
+                          const SizedBox(height: 24),
+
+                          // Source zip file selector
                           FolderSelector(
-                            label: 'Source Folder',
-                            hintText:
-                                'Select folder containing encrypted files',
+                            label: 'Source Zip File',
+                            hintText: 'Select the encrypted zip file',
                             selectedPath: _config.sourceDirectory,
                             onPathSelected: (path) {
                               setState(() {
@@ -313,34 +353,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               });
                             },
                             leadingIcon: Icons.folder_zip_outlined,
-                          ),
-                          const SizedBox(height: 24),
-
-                          // Keys folder selector
-                          FolderSelector(
-                            label: 'Keys Folder',
-                            hintText: 'Select folder containing key files',
-                            selectedPath: _config.keyDirectory,
-                            onPathSelected: (path) {
-                              setState(() {
-                                _config.keyDirectory = path;
-                              });
-                            },
-                            leadingIcon: Icons.key,
-                          ),
-                          const SizedBox(height: 24),
-
-                          // Destination folder selector
-                          FolderSelector(
-                            label: 'Destination Folder',
-                            hintText: 'Select folder for decrypted files',
-                            selectedPath: _config.destinationDirectory,
-                            onPathSelected: (path) {
-                              setState(() {
-                                _config.destinationDirectory = path;
-                              });
-                            },
-                            leadingIcon: Icons.folder_open,
+                            fileMode: true,
+                            allowedExtensions: ['zip'],
                           ),
                           const SizedBox(height: 32),
 
@@ -403,12 +417,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 Text(
                                   '$_processedFiles/$_totalFiles',
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.bodyLarge?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: AppTheme.primaryColor,
-                                  ),
+                                  style: Theme.of(context).textTheme.bodyLarge
+                                      ?.copyWith(fontWeight: FontWeight.bold),
                                 ),
                               ],
                             ),
