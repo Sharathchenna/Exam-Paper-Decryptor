@@ -91,10 +91,12 @@ class DecryptionService {
       _aesCipher.init(false, _aesKeyParameter);
       final blockSize = _aesCipher.blockSize;
       final inputBytes = await inputFile.readAsBytes();
-      
+
       // Process input in complete blocks
       if (inputBytes.length % blockSize != 0) {
-        throw Exception('Input length must be a multiple of ${blockSize} bytes');
+        throw Exception(
+          'Input length must be a multiple of ${blockSize} bytes',
+        );
       }
 
       final output = <int>[];
