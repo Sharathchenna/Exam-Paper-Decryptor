@@ -1,0 +1,43 @@
+name: macOS Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+    
+    - name: Install dependencies
+      run: flutter pub get
+      
+    - name: Build macOS
+      run: flutter build macos --release
+      
+    - name: Create DMG
+      run: |
+        cd build/macos/Build/Products/Release
+        mkdir -p dmg_root
+        cp -r decryptor.app dmg_root/
+        hdiutil create -volname "Decryptor" -srcfolder dmg_root -ov -format UDZO decryptor-macos.dmg
+      
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: build/macos/Build/Products/Release/decryptor-macos.dmg
+        name: Version ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
