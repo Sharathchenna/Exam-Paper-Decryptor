@@ -32,6 +32,11 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _collegeCodeController.addListener(_updateCollegeCode);
     _passwordController.addListener(_updatePassword);
+    
+    // Set up debug logger to capture detailed debugging information
+    _decryptionService.setDebugLogger((message) {
+      _addLog(message);
+    });
   }
 
   @override
@@ -124,6 +129,10 @@ class _HomeScreenState extends State<HomeScreen> {
         '${_config.collegeCode}private.key',
       );
 
+      _addLog('Key files:');
+      _addLog('  AES key: ${keyFile.path} (exists: ${keyFile.existsSync()})');
+      _addLog('  Private key: $privateKeyFile (exists: ${File(privateKeyFile).existsSync()})');
+
       final success = await _decryptionService.loadKey(keyFile, privateKeyFile);
       if (!success) {
         throw Exception('Failed to load encryption key');
@@ -146,12 +155,14 @@ class _HomeScreenState extends State<HomeScreen> {
         if (file is! File) continue;
 
         final fileName = path.basename(file.path);
-        _addLog('Processing file: $fileName');
+        final fileSize = file.lengthSync();
+        _addLog('Processing file: $fileName (size: $fileSize bytes)');
 
         final outputFileName = _decryptionService.generateOutputFilename(
           file.path,
           desktopPath,
         );
+        _addLog('Output file: ${path.basename(outputFileName)}');
 
         final success = await _decryptionService.decrypt(
           File(file.path),
@@ -159,7 +170,10 @@ class _HomeScreenState extends State<HomeScreen> {
         );
 
         if (success) {
+          final outputFile = File(outputFileName);
+          final outputSize = outputFile.existsSync() ? outputFile.lengthSync() : 0;
           _addLog('✅ Successfully decrypted: $fileName');
+          _addLog('   Input: $fileSize bytes → Output: $outputSize bytes');
         } else {
           _addLog('❌ Failed to decrypt: $fileName');
         }
